@@ -1,0 +1,155 @@
+module Denebola
+  VERSION: String
+  class Error < StandardError
+  end
+
+  interface _Summary
+    def +: (_Summary) -> _Summary
+  end
+
+  interface _Item
+    def summary: () -> _Summary
+  end
+
+  interface _Dimension
+    def from_summary: (_Summary) -> Numeric
+  end
+
+  type dimension = Symbol | String | _Dimension | ^(_Summary) -> Numeric
+
+  class Tree
+    include Enumerable[_Item]
+    DEFAULT_BRANCHING: Integer
+    attr_reader branching: Integer
+    def initialize: (?Enumerable[_Item] items, summary: untyped, ?branching: Integer, ?root: Node?) -> void
+    def self.from: (Enumerable[_Item], **untyped) -> Tree
+    def summary: () -> _Summary
+    def size: () -> Integer
+    alias length size
+    def empty?: () -> bool
+    def each: () { (_Item) -> void } -> self
+            | () -> Enumerator[_Item, self]
+    def []: (Integer) -> _Item?
+    def push: (_Item) -> Tree
+    def append: (Tree | Enumerable[_Item]) -> Tree
+    def replace_at: (Integer, Enumerable[_Item]) -> Tree
+    def split_at: (Integer) -> [Tree, Tree]
+    def slice: (Integer, ?Integer) -> Tree
+    def cursor: (dimension) -> Cursor
+    def locate: (Numeric, dimension, ?bias: :left | :right) -> [Integer, _Item?, _Summary]
+    def prefix_summary: (Integer) -> _Summary
+    def check_invariants!: () -> true
+
+    class Node
+      attr_reader entries: Array[Node | _Item]
+      attr_reader summary: _Summary
+      attr_reader prefixes: Array[_Summary]
+      attr_reader counts: Array[Integer]
+      attr_reader height: Integer
+      attr_reader count: Integer
+      def initialize: (Array[Node | _Item], Integer, _Summary) -> void
+      def each: () { (_Item) -> void } -> void
+    end
+  end
+
+  class Cursor
+    attr_reader tree: Tree
+    attr_reader dimension: dimension
+    attr_reader index: Integer
+    attr_reader item: _Item?
+    attr_reader summary: _Summary
+    def initialize: (Tree, dimension) -> void
+    def seek: (Numeric, ?bias: :left | :right) -> self
+    def next: () -> _Item?
+    def prev: () -> _Item?
+    def read_until: (Numeric, ?bias: :left | :right) -> Tree
+  end
+
+  class TextSummary
+    FIELDS: Array[Symbol]
+    ZERO: TextSummary
+    attr_reader bytesize: Integer
+    attr_reader length: Integer
+    attr_reader utf16_length: Integer
+    attr_reader break_count: Integer
+    attr_reader longest_row: Integer
+    attr_reader longest_row_length: Integer
+    attr_reader first_line_length: Integer
+    attr_reader last_line_length: Integer
+    def initialize: (**untyped) -> void
+    def self.zero: () -> TextSummary
+    def self.from_text: (String, ?line_ends: Array[Integer]?) -> TextSummary
+    def +: (TextSummary) -> TextSummary
+    def ==: (untyped) -> bool
+    alias eql? ==
+    def hash: () -> Integer
+    def starts_with_lf?: () -> bool
+    def ends_with_cr?: () -> bool
+    def project_combined: (Symbol, TextSummary) -> untyped
+  end
+
+  class Point
+    attr_reader row: Integer
+    attr_reader column: Integer
+    def initialize: (?Integer, ?Integer, ?row: Integer, ?column: Integer) -> void
+    def ==: (untyped) -> bool
+    alias eql? ==
+    def hash: () -> Integer
+    def to_a: () -> [Integer, Integer]
+    def inspect: () -> String
+  end
+
+  module Dimensions
+    BYTES: ^(TextSummary) -> Integer
+    CHARACTERS: ^(TextSummary) -> Integer
+    UTF16: ^(TextSummary) -> Integer
+    LINE_BREAKS: ^(TextSummary) -> Integer
+  end
+
+  class Rope
+    DEFAULT_CHUNK_SIZE: Integer
+    LINE_BREAK: Regexp
+    attr_reader chunk_size: Integer
+    def initialize: (?String, ?chunk_size: Integer, ?branching: Integer, ?tree: Tree?) -> void
+    def summary: () -> TextSummary
+    def bytesize: () -> Integer
+    def length: () -> Integer
+    alias size length
+    def utf16_length: () -> Integer
+    def line_count: () -> Integer
+    def empty?: () -> bool
+    def each_chunk: () { (String) -> void } -> self
+                  | () -> Enumerator[String, self]
+    def to_s: () -> String
+    def insert: (Integer, String) -> Rope
+    def delete: (Range[Integer?]) -> Rope
+    def replace: (Range[Integer?], String) -> Rope
+    def apply_edits: (Array[[Range[Integer?], String]]) -> Rope
+    def byteslice: (Integer | Range[Integer?], ?Integer?) -> Rope
+    def split_at: (Integer) -> [Rope, Rope]
+    def line: (Integer) -> String
+    def line_start: (Integer) -> Integer
+    def point_at: (Integer) -> Point
+    def offset_at: (Point) -> Integer
+    def utf16_offset_at: (Integer) -> Integer
+    def offset_at_utf16: (Integer) -> Integer
+    def utf16_point_at: (Integer) -> Point
+    def offset_at_utf16_point: (Point) -> Integer
+    def anchor: (Integer, ?bias: :left | :right) -> Anchor
+    def check_invariants!: () -> true
+
+    class Chunk
+      attr_reader text: String
+      attr_reader summary: TextSummary
+      attr_reader line_ends: Array[Integer]
+      def initialize: (String) -> void
+    end
+  end
+
+  class Anchor
+    attr_reader offset: Integer
+    attr_reader bias: :left | :right
+    def initialize: (Integer, ?bias: :left | :right) -> void
+    def transform: (Array[[Range[Integer], String]]) -> Anchor
+  end
+end
