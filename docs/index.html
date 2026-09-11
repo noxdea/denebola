@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Denebola is a persistent Unicode text rope and summary B+ tree for Ruby.">
+    <meta name="theme-color" content="#10242b">
+    <link rel="canonical" href="https://noxdea.github.io/denebola/">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <title>Denebola — Persistent Unicode text for Ruby</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header shell">
+      <a class="brand" href="#main" aria-label="Denebola home">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 4h8v5H3zM13 4h8v5h-8zM3 11h12v9H3zM17 11h4v9h-4z"/>
+        </svg>
+        <span>Denebola</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#coordinates">Coordinates</a>
+        <a href="#tree">Summary tree</a>
+        <a href="https://github.com/noxdea/denebola">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero shell">
+        <div class="hero-copy">
+          <h1>Edit text.<br>Keep the past.</h1>
+          <p class="hero-lead">An immutable Unicode rope and summary B+ tree for Ruby. Built for editors and language tools that need precise positions and cheap snapshots.</p>
+          <div class="hero-actions">
+            <a class="button" href="#install">Install Denebola</a>
+            <a class="plain-link" href="https://github.com/noxdea/denebola#readme">Read the API guide</a>
+          </div>
+          <p class="release-line">Version 0.1.0 supports Ruby 3.1+ with zero runtime dependencies.</p>
+        </div>
+
+        <figure class="sharing-figure" aria-labelledby="sharing-title sharing-caption">
+          <figcaption>
+            <strong id="sharing-title">One edit, two valid versions</strong>
+            <span id="sharing-caption">Only the changed path is copied.</span>
+          </figcaption>
+          <svg viewBox="0 0 680 330" role="img" aria-label="The original and edited roots point to two shared chunks. Only the edited text chunk is new.">
+            <title>Structural sharing between two rope snapshots</title>
+            <g class="edges">
+              <path d="M135 90 78 206M135 90 298 206M135 90 418 206"/>
+              <path d="M545 90 578 206M545 90 298 206M545 90 418 206"/>
+            </g>
+            <g class="node-labels">
+              <text x="135" y="26" text-anchor="middle">snapshot</text>
+              <text x="545" y="26" text-anchor="middle">edited</text>
+              <text x="358" y="177" text-anchor="middle">shared</text>
+            </g>
+            <g class="nodes">
+              <rect x="53" y="45" width="164" height="46" rx="8"/>
+              <rect class="changed" x="463" y="45" width="164" height="46" rx="8"/>
+              <rect x="24" y="206" width="108" height="56" rx="8"/>
+              <rect class="shared" x="244" y="206" width="108" height="56" rx="8"/>
+              <rect class="shared" x="364" y="206" width="108" height="56" rx="8"/>
+              <rect class="changed" x="524" y="206" width="108" height="56" rx="8"/>
+            </g>
+            <g class="node-text">
+              <text x="135" y="74" text-anchor="middle">root@0</text>
+              <text x="545" y="74" text-anchor="middle">root@1</text>
+              <text x="78" y="240" text-anchor="middle">hello</text>
+              <text x="298" y="240" text-anchor="middle">\n</text>
+              <text x="418" y="240" text-anchor="middle">world</text>
+              <text x="578" y="240" text-anchor="middle">hello, there</text>
+            </g>
+            <g class="figure-note">
+              <text x="24" y="304">snapshot.to_s  # =&gt; "hello\nworld"</text>
+              <text x="656" y="304" text-anchor="end">rope.to_s  # =&gt; "hello, there\nworld"</text>
+            </g>
+          </svg>
+        </figure>
+      </section>
+
+      <section class="metrics" aria-label="Measured performance">
+        <div class="metric-list shell">
+          <dl><dt>Build an 11 MB document</dt><dd>39.5 ms</dd></dl>
+          <dl><dt>Insert one character</dt><dd>12.3 µs</dd></dl>
+          <dl><dt>Read one line</dt><dd>1.38 µs</dd></dl>
+        </div>
+        <p class="shell metric-note">Measured on arm64 macOS with Ruby 4.0.2 and YJIT. Results vary by document and hardware.</p>
+      </section>
+
+      <section class="section shell" id="coordinates">
+        <div class="section-intro">
+          <h2>Coordinates without guesswork.</h2>
+          <p>Text tools speak several coordinate systems. Denebola keeps them on the same immutable value and rejects positions that split a codepoint or surrogate pair.</p>
+        </div>
+        <div class="coordinate-list">
+          <div><span>UTF-8 bytes</span><code>rope.bytesize</code><strong>edits &amp; slices</strong></div>
+          <div><span>Unicode codepoints</span><code>Point(1, 1)</code><strong>row &amp; column</strong></div>
+          <div><span>UTF-16 units</span><code>utf16_offset_at</code><strong>language tools</strong></div>
+          <div><span>Five line breaks</span><code>LF · CRLF · CR · LS · PS</code><strong>line access</strong></div>
+        </div>
+      </section>
+
+      <section class="section tree-section" id="tree">
+        <div class="shell split">
+          <div class="section-intro">
+            <h2>Bring your own summary.</h2>
+            <p>The rope is built on a generic persistent B+ tree. Give each item an immutable summary, then seek through any monotone dimension.</p>
+            <ul>
+              <li>Updates copy touched paths and share the rest.</li>
+              <li>Nodes cache cumulative summaries and item counts.</li>
+              <li>Cursors seek by bytes, characters, UTF-16, lines, or your own dimension.</li>
+            </ul>
+          </div>
+          <pre aria-label="Ruby summary tree example"><code>tree = Denebola::Tree.new(items, summary: Weight)
+tree = tree.push(next_item)
+
+cursor = tree.cursor(:weight).seek(42)
+cursor.item
+cursor.summary # everything before item</code></pre>
+        </div>
+      </section>
+
+      <section class="section install shell" id="install">
+        <div class="section-intro">
+          <h2>Start with one require.</h2>
+          <p>Install the gem, create a rope, and keep any version you still need. Every edit returns a new frozen value.</p>
+          <a class="plain-link" href="https://rubygems.org/gems/denebola">View on RubyGems</a>
+        </div>
+        <div class="install-code">
+          <pre><code>gem install denebola</code></pre>
+          <pre><code>require "denebola"
+
+rope = Denebola::Rope.new("hello\nworld")
+snapshot = rope
+rope = rope.insert(5, ", there")
+
+snapshot.to_s # "hello\nworld"
+rope.to_s     # "hello, there\nworld"</code></pre>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer shell">
+      <p>Denebola is open source under the MIT License.</p>
+      <div><a href="https://github.com/noxdea/denebola">Source</a><a href="https://github.com/noxdea/denebola/releases">Releases</a><a href="https://rubygems.org/gems/denebola">RubyGems</a></div>
+    </footer>
+  </body>
+</html>
