@@ -11,7 +11,13 @@ namespace :test do
   task(:oracle) { ruby "-Ilib:test", "test/test_property.rb" }
 end
 
-task(:bench) { ruby "--yjit", "-Ilib", "bench/rope.rb" }
+task(:bench) do
+  ruby "--yjit", "-Ilib", "bench/rope.rb"
+  ruby "--yjit", "-Ilib", "bench/lazy_rope.rb"
+end
 namespace :bench do
-  task(:assert) { ruby "--yjit", "-Ilib", "bench/rope.rb", "--assert" }
+  task(:assert) do
+    ruby "--yjit", "-Ilib", "bench/rope.rb", "--assert"
+    ruby "--yjit", "-Ilib", "bench/lazy_rope.rb", "--assert"
+  end
 end

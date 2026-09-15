@@ -146,6 +146,43 @@ module Denebola
     end
   end
 
+  class LazyRope
+    DEFAULT_CHUNK_SIZE: Integer
+    DEFAULT_CACHE_CHUNKS: Integer
+    attr_reader chunk_size: Integer
+    attr_reader cached_bytes: Integer
+    def self.open: (String | _ToPath path, ?chunk_size: Integer, ?encoding: Encoding, ?cache_chunks: Integer) -> LazyRope
+    def initialize: (String | _ToPath path, ?chunk_size: Integer, ?encoding: Encoding, ?cache_chunks: Integer) -> void
+    def lazy?: () -> true
+    def closed?: () -> bool
+    def bytesize: () -> Integer
+    def size: () -> Integer
+    def empty?: () -> bool
+    def length: () -> Integer
+    def utf16_length: () -> Integer
+    def line_count: (?exact: bool) -> Integer
+    def line_start: (Integer) -> Integer
+    def line: (Integer) -> String
+    def byteslice: (Integer | Range[Integer?], ?Integer?) -> Rope
+    def each_chunk: () { (String) -> void } -> self
+                  | () -> Enumerator[String, self]
+    def materialize: (?Range[Integer?]?) -> Rope
+    def to_s: () -> String
+    def edit: (Range[Integer?], String) -> self
+    def insert: (Integer, String) -> self
+    def delete: (Range[Integer?]) -> self
+    def replace: (Range[Integer?], String) -> self
+    def point_at: (Integer) -> Point
+    def offset_at: (Point) -> Integer
+    def utf16_offset_at: (Integer) -> Integer
+    def offset_at_utf16: (Integer) -> Integer
+    def utf16_point_at: (Integer) -> Point
+    def offset_at_utf16_point: (Point) -> Integer
+    def anchor: (Integer, ?bias: :left | :right) -> Anchor
+    def check_invariants!: () -> true
+    def close: () -> nil
+  end
+
   class Anchor
     attr_reader offset: Integer
     attr_reader bias: :left | :right
