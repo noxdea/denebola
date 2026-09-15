@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "objspace"
 require "tempfile"
 
 class LazyRopeTest < Minitest::Test
@@ -43,6 +44,13 @@ class LazyRopeTest < Minitest::Test
       assert_equal ["a", "b", "c", "d", "e", ""], (0...6).map { |row| rope.line(row) }
       assert_equal [0, 3, 5, 7, 11, 15], (0...6).map { |row| rope.line_start(row) }
       assert_raises(RangeError) { rope.line(6) }
+    end
+  end
+
+  def test_estimated_line_count_includes_a_cr_at_the_index_boundary
+    with_file("abc\rdefgh") do |_file, rope|
+      assert_operator rope.line_count, :>=, 2
+      assert_equal 2, rope.line_count(exact: true)
     end
   end
 
@@ -152,6 +160,21 @@ class LazyRopeTest < Minitest::Test
       assert_equal "Hllo, Ruby\nworld", rope.materialize.to_s
       assert_equal "Ruby", rope.materialize(6...10).to_s
       assert_equal 2, rope.line_count(exact: true)
+    end
+  end
+
+  def test_small_changes_do_not_materialize_a_large_text_overlay
+    with_file("") do |_file, rope|
+      rope.edit(0...0, "x" * (4 * 1024 * 1024))
+      GC.start
+      GC.disable
+      allocated_before = ObjectSpace.memsize_of_all(String)
+      rope.insert(rope.bytesize, "y")
+      assert_equal "x", rope.byteslice(0, 1).to_s
+      allocated = ObjectSpace.memsize_of_all(String) - allocated_before
+      assert_operator allocated, :<, 1024 * 1024
+    ensure
+      GC.enable
     end
   end
 

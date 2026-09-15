@@ -72,10 +72,11 @@ module Denebola
       return packed_line_count if @index_complete
       scan_index if @indexed_offset.zero? && bytesize.positive?
 
-      breaks = packed_line_count - 1
+      known_lines = packed_line_count + (@pending_cr ? 1 : 0)
+      breaks = known_lines - 1
       return 1 if breaks.zero? || @indexed_offset.zero?
 
-      [packed_line_count, (breaks * bytesize.fdiv(@indexed_offset)).round + 1].max
+      [known_lines, (breaks * bytesize.fdiv(@indexed_offset)).round + 1].max
     end
 
     def line_start(row)
@@ -134,7 +135,6 @@ module Denebola
       start, finish = byte_bounds(range)
       validate_offset(start)
       validate_offset(finish)
-      index_to(start)
 
       updated = pieces_for(0, start)
       updated << TextPiece.new(rope: Rope.new(replacement)).freeze unless replacement.empty?
@@ -301,7 +301,7 @@ module Denebola
         previous = result.last
         if previous.is_a?(FilePiece) && piece.is_a?(FilePiece) && previous.offset + previous.bytesize == piece.offset
           result[-1] = FilePiece.new(offset: previous.offset, bytesize: previous.bytesize + piece.bytesize).freeze
-        elsif previous.is_a?(TextPiece) && piece.is_a?(TextPiece)
+        elsif previous.is_a?(TextPiece) && piece.is_a?(TextPiece) && previous.bytesize + piece.bytesize <= Rope::DEFAULT_CHUNK_SIZE
           result[-1] = TextPiece.new(rope: Rope.new(previous.rope.to_s + piece.rope.to_s)).freeze
         else
           result << piece
@@ -320,8 +320,10 @@ module Denebola
       raise RangeError, "read out of bounds" unless offset >= 0 && count >= 0 && offset + count <= (@piece_ends.last || 0)
 
       output = String.new(capacity: count, encoding: Encoding::BINARY)
-      piece_start = 0
-      @pieces.each do |piece|
+      piece_index = @piece_ends.bsearch_index { |piece_end| piece_end > offset } || @pieces.length
+      piece_start = piece_index.zero? ? 0 : @piece_ends[piece_index - 1]
+      while piece_index < @pieces.length
+        piece = @pieces[piece_index]
         piece_finish = piece_start + piece.bytesize
         if offset < piece_finish && offset + count > piece_start
           local_start = [offset - piece_start, 0].max
@@ -329,14 +331,29 @@ module Denebola
           if piece.is_a?(FilePiece)
             output << read_file(piece.offset + local_start, length)
           else
-            output << piece.rope.to_s.b.byteslice(local_start, length)
+            append_rope_bytes(output, piece.rope, local_start, length)
           end
         end
         break if output.bytesize == count
         piece_start = piece_finish
+        piece_index += 1
       end
       raise Error, "short read" unless output.bytesize == count
       output
+    end
+
+    def append_rope_bytes(output, rope, offset, count)
+      tree = rope.__send__(:tree)
+      index, chunk, prefix = tree.locate(offset, :bytesize)
+      local = offset - prefix.bytesize
+      while chunk && count.positive?
+        length = [count, chunk.text.bytesize - local].min
+        output << chunk.text.b.byteslice(local, length)
+        count -= length
+        local = 0
+        index += 1
+        chunk = tree[index]
+      end
     end
 
     def read_file(offset, count)
