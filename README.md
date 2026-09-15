@@ -28,6 +28,7 @@ Denebola is a library for immutable, structurally shared sequences. It provides 
 ## Features
 
 - Persistent text editing with structural sharing
+- Bounded-memory, file-backed editing for multi-gigabyte text
 - UTF-8 byte, Unicode codepoint, UTF-16, and line-based indexing
 - Batched edits and explicit anchor transformation
 - LF, CRLF, CR, U+2028, and U+2029 line break support
@@ -72,6 +73,20 @@ rope.line(0)  # => "hello, there"
 rope.to_s     # => "hello, there\nworld"
 snapshot.to_s # => "hello\nworld"
 ```
+
+For files that should not be copied into memory, open a `LazyRope`:
+
+```ruby
+text = Denebola::LazyRope.open("server.log")
+text.line(1_000_000)                 # indexes only as far as needed
+text.line_count                      # estimate until the index reaches EOF
+text.line_count(exact: true)         # force an exact count
+text.edit(0...5, "INFO:")           # untouched bytes remain file-backed
+text.materialize(0...1024)           # an ordinary editable Rope
+text.close
+```
+
+`LazyRope` reads 1 MiB chunks by default and keeps eight chunks in an LRU cache. `byteslice`, line access, byte/codepoint positions, UTF-16 positions, and anchors follow `Rope` semantics. `edit`, `insert`, `delete`, and `replace` mutate the open view and store only replacement text in memory; call `materialize` when an immutable `Rope` snapshot is needed. A file changed, removed, or replaced after opening raises `Denebola::Error`. `to_s` and `materialize` without a range intentionally load the complete logical file.
 
 ## Text Rope
 

@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["t.yudai92@gmail.com"]
 
   spec.summary = "Persistent summary B+ trees and Unicode text ropes in pure Ruby"
-  spec.description = "Immutable, structurally shared trees with summary dimensions, UTF-8 text editing, line and UTF-16 indexing, and anchors."
+  spec.description = "Immutable text ropes plus bounded-memory, file-backed editing with line and UTF-16 indexing."
   spec.homepage = "https://github.com/noxdea/denebola"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1"
