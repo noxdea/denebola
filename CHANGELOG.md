@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-09-16
+
+- Keep same-offset batch edit ordering deterministic across ropes and anchors.
+- Transform right-biased anchors after every insertion and replacement at their boundary.
+
 ## 0.2.0 — 2026-09-15
 
 - Add `LazyRope` for bounded-memory access to very large UTF-8 files.

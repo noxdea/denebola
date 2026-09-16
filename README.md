@@ -109,7 +109,7 @@ rope.apply_edits([[0...5, "Hi"], [6...11, "Ruby"]]).to_s
 
 Ranges passed to `replace`, `apply_edits`, and `byteslice` address bytes in UTF-8. Bounds and codepoint boundaries are checked. Inclusive, exclusive, beginless, and endless Ruby ranges are accepted; invalid encodings, split codepoints, and overlapping batch edits raise exceptions.
 
-`apply_edits` applies nonoverlapping edits against one original snapshot and sorts them into source order. Adjacent ranges are allowed. Input strings are copied or shared safely with Ruby's copy-on-write strings, so later mutation of the source cannot alter a rope.
+`apply_edits` applies nonoverlapping edits against one original snapshot, and `Anchor#transform` uses the same source order. Adjacent ranges are allowed; zero-length insertions at the same offset keep input order and precede a replacement beginning there. Input strings are copied or shared safely with Ruby's copy-on-write strings, so later mutation of the source cannot alter a rope.
 
 Chunks preserve extended grapheme clusters when building or joining text. A single unusually long grapheme may exceed the configured chunk size; explicit byte slices and edits may operate between codepoints inside a grapheme.
 

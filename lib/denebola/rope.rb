@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "edit"
+
 module Denebola
   class Rope
     DEFAULT_CHUNK_SIZE = 1024
@@ -22,7 +24,7 @@ module Denebola
     def initialize(text = "", chunk_size: DEFAULT_CHUNK_SIZE, branching: Tree::DEFAULT_BRANCHING, tree: nil)
       raise ArgumentError, "chunk_size must be an integer >= 4" unless chunk_size.is_a?(Integer) && chunk_size >= 4
       @chunk_size = chunk_size
-      @tree = tree || Tree.new(chunks(normalize_text(text)), summary: TextSummary, branching: branching)
+      @tree = tree || Tree.new(chunks(Edit.normalize_text(text)), summary: TextSummary, branching: branching)
       freeze
     end
 
@@ -51,7 +53,7 @@ module Denebola
 
     def replace(range, text)
       start, finish = byte_bounds(range)
-      replacement = normalize_text(text)
+      replacement = Edit.normalize_text(text)
       first_index, first, prefix = locate_byte_offset(start)
       last_index, last, suffix = locate_byte_offset(finish)
       if first_index.positive? && start == prefix.bytesize
@@ -76,7 +78,7 @@ module Denebola
 
     # Ranges refer to the original snapshot. Adjacent edits are allowed; overlaps are rejected.
     def apply_edits(edits)
-      normalized = edits.map { |range, text| [*byte_bounds(range), normalize_text(text)] }.sort_by { |start, finish, _| [start, finish] }
+      normalized = Edit.sort(edits.map { |range, text| [*byte_bounds(range), Edit.normalize_text(text)] })
       previous = 0
       normalized.each do |start, finish, _|
         raise ArgumentError, "overlapping edits" if start < previous
@@ -232,13 +234,6 @@ module Denebola
       return left if right.empty?
       boundary = chunks(left[left.size - 1].text + right[0].text)
       left.slice(0, left.size - 1).append(boundary).append(right.slice(1, right.size - 1))
-    end
-
-    def normalize_text(text)
-      raise TypeError, "text must be a String" unless text.is_a?(String)
-      string = text.encoding == Encoding::UTF_8 ? text : text.encode(Encoding::UTF_8)
-      raise ArgumentError, "text must be valid UTF-8" unless string.valid_encoding?
-      string
     end
 
     def chunks(text)
