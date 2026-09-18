@@ -10,6 +10,20 @@ module Denebola
     TextPiece = Struct.new(:rope, keyword_init: true) do
       def bytesize = rope.bytesize
     end
+    class FileOwner
+      def initialize(file)
+        @file = file
+        @lock = Mutex.new
+      end
+
+      def closed? = @file.closed?
+
+      def close
+        @lock.synchronize { @file.close unless @file.closed? }
+        nil
+      end
+    end
+    private_constant :FileOwner
 
     attr_reader :chunk_size, :cached_bytes
 
@@ -25,6 +39,7 @@ module Denebola
       flags = File::RDONLY | File::BINARY
       flags |= File::SHARE_DELETE if defined?(File::SHARE_DELETE)
       @file = File.open(path, flags)
+      @file_owner = FileOwner.new(@file)
       @path = File.expand_path(path)
       @chunk_size = chunk_size
       @cache_chunks = cache_chunks
@@ -45,7 +60,7 @@ module Denebola
     end
 
     def lazy? = true
-    def closed? = @file.closed?
+    def closed? = @file_owner.closed?
 
     def bytesize
       ensure_unchanged!
@@ -92,6 +107,26 @@ module Denebola
       index_until_line(row + 1)
       ending = row + 1 < packed_line_count ? unpack_line_start(row + 1) : bytesize
       read_bytes(start, ending - start).force_encoding(Encoding::UTF_8).sub(/(?:\r\n|[\r\n\u2028\u2029])\z/, "")
+    end
+
+    def line_end(row)
+      start = line_start(row)
+      index_until_line(row + 1)
+      ending = row + 1 < packed_line_count ? unpack_line_start(row + 1) : bytesize
+      tail = read_bytes([ending - 3, start].max, [ending - start, 3].min)
+      ending - (tail.end_with?("\r\n") ? 2 : tail.end_with?("\xE2\x80\xA8".b, "\xE2\x80\xA9".b) ? 3 : tail.end_with?("\r", "\n") ? 1 : 0)
+    end
+
+    def line_window(row, from: 0, max_bytes: 16_384)
+      raise TypeError, "from must be an Integer" unless from.is_a?(Integer)
+      raise ArgumentError, "max_bytes must be a nonnegative integer" unless max_bytes.is_a?(Integer) && max_bytes >= 0
+
+      start, ending = line_start(row), line_end(row)
+      offset = (start + from).clamp(start, ending)
+      offset -= 1 while offset > start && offset < ending && (read_bytes(offset, 1).getbyte(0) & 0xC0) == 0x80
+      value = read_bytes(offset, [max_bytes, ending - offset].min)
+      value = value.byteslice(0, complete_utf8_length(value)) unless value.empty?
+      [value.force_encoding(Encoding::UTF_8), offset - start]
     end
 
     def byteslice(offset, length = nil)
@@ -148,6 +183,34 @@ module Denebola
     def insert(offset, text) = edit(offset...offset, text)
     def delete(range) = edit(range, "")
     def replace(range, text) = edit(range, text)
+
+    # Ranges address the original snapshot. The returned view has independent
+    # overlays, indexes, and cache. Snapshots share one backing-file lifetime:
+    # closing any snapshot closes the complete family.
+    def apply_edits(edits)
+      normalized = Edit.sort(edits.map do |range, text|
+        start, finish = byte_bounds(range)
+        validate_offset(start)
+        validate_offset(finish)
+        [start, finish, normalize_text(text)]
+      end)
+      previous = 0
+      normalized.each do |start, finish, _text|
+        raise ArgumentError, "overlapping edits" if start < previous
+        previous = finish
+      end
+      return self if normalized.empty?
+
+      updated = []
+      consumed = 0
+      normalized.each do |start, finish, text|
+        updated.concat(pieces_for(consumed, start))
+        updated << TextPiece.new(rope: Rope.new(text)).freeze unless text.empty?
+        consumed = finish
+      end
+      updated.concat(pieces_for(consumed, bytesize))
+      snapshot_with(coalesce(updated))
+    end
 
     def point_at(byte_offset)
       validate_offset(byte_offset)
@@ -236,8 +299,7 @@ module Denebola
     end
 
     def close
-      @file.close unless @file.closed?
-      nil
+      @file_owner.close
     end
 
     private
@@ -312,6 +374,17 @@ module Denebola
     def rebuild_piece_ends
       total = 0
       @piece_ends = @pieces.map { |piece| total += piece.bytesize }
+    end
+
+    def snapshot_with(pieces)
+      ensure_unchanged!
+      snapshot = dup
+      snapshot.instance_variable_set(:@cache, {})
+      snapshot.instance_variable_set(:@cached_bytes, 0)
+      snapshot.instance_variable_set(:@pieces, pieces.freeze)
+      snapshot.__send__(:rebuild_piece_ends)
+      snapshot.__send__(:reset_index)
+      snapshot
     end
 
     def read_bytes(offset, count)
@@ -562,7 +635,7 @@ module Denebola
     end
 
     def ensure_unchanged!
-      raise IOError, "closed file" if @file.closed?
+      raise IOError, "closed file" if closed?
       unchanged = file_stamp(@file.stat) == @stamp && file_stamp(File.stat(@path)) == @path_stamp
       raise Error, "file changed on disk; reopen it" unless unchanged
     rescue Errno::ENOENT

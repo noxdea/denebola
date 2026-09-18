@@ -162,7 +162,9 @@ module Denebola
     def utf16_length: () -> Integer
     def line_count: (?exact: bool) -> Integer
     def line_start: (Integer) -> Integer
+    def line_end: (Integer) -> Integer
     def line: (Integer) -> String
+    def line_window: (Integer, ?from: Integer, ?max_bytes: Integer) -> [String, Integer]
     def byteslice: (Integer | Range[Integer?], ?Integer?) -> Rope
     def each_chunk: () { (String) -> void } -> self
                   | () -> Enumerator[String, self]
@@ -172,6 +174,7 @@ module Denebola
     def insert: (Integer, String) -> self
     def delete: (Range[Integer?]) -> self
     def replace: (Range[Integer?], String) -> self
+    def apply_edits: (Array[[Range[Integer?], String]]) -> LazyRope
     def point_at: (Integer) -> Point
     def offset_at: (Point) -> Integer
     def utf16_offset_at: (Integer) -> Integer

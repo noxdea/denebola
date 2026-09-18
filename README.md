@@ -86,7 +86,7 @@ text.materialize(0...1024)           # an ordinary editable Rope
 text.close
 ```
 
-`LazyRope` reads 1 MiB chunks by default and keeps eight chunks in an LRU cache. `byteslice`, line access, byte/codepoint positions, UTF-16 positions, and anchors follow `Rope` semantics. `edit`, `insert`, `delete`, and `replace` mutate the open view and store only replacement text in memory; call `materialize` when an immutable `Rope` snapshot is needed. A file changed, removed, or replaced after opening raises `Denebola::Error`. `to_s` and `materialize` without a range intentionally load the complete logical file.
+`LazyRope` reads 1 MiB chunks by default and keeps eight chunks in an LRU cache. `byteslice`, line access, byte/codepoint positions, UTF-16 positions, and anchors follow `Rope` semantics. `edit`, `insert`, `delete`, and `replace` mutate the open view; `apply_edits` returns a persistent view while storing only replacement text in memory. Views in that snapshot family share one backing-file lifetime, so closing any view closes the family. Call `materialize` for an independent `Rope` snapshot. A file changed, removed, or replaced after opening raises `Denebola::Error`. `to_s` and `materialize` without a range intentionally load the complete logical file.
 
 ## Text Rope
 

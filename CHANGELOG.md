@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add persistent batched edits and bounded line-window access to `LazyRope`; related snapshots share one backing-file close lifecycle.
+
 ## 0.2.1 — 2026-09-16
 
 - Keep same-offset batch edit ordering deterministic across ropes and anchors.

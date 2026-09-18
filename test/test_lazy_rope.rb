@@ -47,6 +47,25 @@ class LazyRopeTest < Minitest::Test
     end
   end
 
+  def test_line_ends_and_bounded_utf8_windows
+    source = "\u03B1\u03B2\u03B3\u{1F600}delta\r\nx\u2028last"
+    with_file(source) do |_file, rope|
+      first_end = source.b.index("\r\n")
+      assert_equal first_end, rope.line_end(0)
+      assert_equal source.b.index("\u2028".b), rope.line_end(1)
+      assert_equal source.bytesize, rope.line_end(2)
+
+      value, offset = rope.line_window(0, from: 3, max_bytes: 5)
+      assert_equal ["\u03B2\u03B3", 2], [value, offset]
+      assert value.valid_encoding?
+      assert_operator value.bytesize, :<=, 5
+      assert_equal ["", first_end], rope.line_window(0, from: 1_000, max_bytes: 8)
+      assert_equal ["", 0], rope.line_window(0, max_bytes: 0)
+      assert_raises(TypeError) { rope.line_window(0, from: 1.5) }
+      assert_raises(ArgumentError) { rope.line_window(0, max_bytes: -1) }
+    end
+  end
+
   def test_estimated_line_count_includes_a_cr_at_the_index_boundary
     with_file("abc\rdefgh") do |_file, rope|
       assert_operator rope.line_count, :>=, 2
@@ -160,6 +179,168 @@ class LazyRopeTest < Minitest::Test
       assert_equal "Hllo, Ruby\nworld", rope.materialize.to_s
       assert_equal "Ruby", rope.materialize(6...10).to_s
       assert_equal 2, rope.line_count(exact: true)
+    end
+  end
+
+  def test_batched_edits_return_independent_snapshots
+    source = "a\u{1F600}\r\nbeta\nomega"
+    with_file(source) do |_file, rope|
+      changed = rope.apply_edits([
+        [1...5, "\u754C"],
+        [7...11, "B"],
+        [12...12, "!"],
+        [12...12, "?"]
+      ])
+
+      assert_equal source, rope.to_s
+      assert_equal "a\u754C\r\nB\n!?omega", changed.to_s
+      refute_same rope, changed
+
+      changed.edit(0...1, "A")
+      rope.edit(0...1, "z")
+      assert_equal "A\u754C\r\nB\n!?omega", changed.to_s
+      assert_equal "z\u{1F600}\r\nbeta\nomega", rope.to_s
+      assert_raises(ArgumentError) { rope.apply_edits([[7...11, "x"], [8...8, "y"]]) }
+      assert_raises(RangeError) { rope.apply_edits([[2...2, "x"]]) }
+    ensure
+      changed&.close
+    end
+  end
+
+  def test_closing_source_or_derived_closes_the_snapshot_family
+    with_file("hello") do |_file, rope|
+      changed = rope.apply_edits([[0...1, "H"]])
+      handle = rope.instance_variable_get(:@file)
+      changed.close
+      assert changed.closed?
+      assert rope.closed?
+      assert handle.closed?
+      assert_raises(IOError) { changed.to_s }
+      assert_raises(IOError) { rope.to_s }
+    end
+
+    with_file("hello") do |_file, rope|
+      changed = rope.apply_edits([[0...1, "H"]])
+      handle = rope.instance_variable_get(:@file)
+      rope.close
+      assert rope.closed?
+      assert changed.closed?
+      assert handle.closed?
+      assert_raises(IOError) { changed.to_s }
+    end
+  end
+
+  def test_repeated_snapshots_share_one_file_descriptor
+    with_file("hello") do |_file, rope|
+      snapshots = [rope]
+      50.times { snapshots << snapshots.last.apply_edits([[0...0, "x"]]) }
+      handles = snapshots.map { |snapshot| snapshot.instance_variable_get(:@file) }
+      assert_equal 1, handles.map(&:object_id).uniq.length
+      assert_equal "x" * 50 + "hello", snapshots.last.to_s
+
+      snapshots.last.close
+      assert handles.first.closed?
+      assert snapshots.all?(&:closed?)
+    ensure
+      snapshots&.each(&:close)
+    end
+  end
+
+  def test_retained_history_is_readable_until_the_current_snapshot_closes
+    with_file("hello") do |_file, rope|
+      history = [rope]
+      3.times { |index| history << history.last.apply_edits([[index...index, index.to_s]]) }
+      assert_equal ["hello", "0hello", "01hello", "012hello"], history.map(&:to_s)
+
+      history.last.close
+      assert history.all?(&:closed?)
+      assert history.first.instance_variable_get(:@file).closed?
+      history.each { |snapshot| assert_raises(IOError) { snapshot.to_s } }
+    ensure
+      history&.each(&:close)
+    end
+  end
+
+  def test_concurrent_family_close_is_idempotent
+    with_file("hello") do |_file, rope|
+      history = [rope]
+      9.times { history << history.last.apply_edits([[0...0, "x"]]) }
+      errors = []
+      lock = Mutex.new
+      threads = 20.times.map do |index|
+        Thread.new do
+          100.times { history[index % history.length].close }
+        rescue StandardError => error
+          lock.synchronize { errors << error }
+        end
+      end
+      threads.each(&:join)
+
+      assert_empty errors
+      assert history.all?(&:closed?)
+      assert history.first.instance_variable_get(:@file).closed?
+    ensure
+      history&.each(&:close)
+    end
+  end
+
+  def test_snapshot_construction_failure_leaves_the_owner_open
+    with_file("hello") do |_file, rope|
+      handle = rope.instance_variable_get(:@file)
+      rope.define_singleton_method(:dup) { raise "copy failed" }
+      begin
+        assert_raises(RuntimeError) { rope.apply_edits([[0...1, "H"]]) }
+      ensure
+        rope.singleton_class.remove_method(:dup)
+      end
+      refute rope.closed?
+      refute handle.closed?
+      assert_equal "hello", rope.to_s
+      rope.close
+      assert handle.closed?
+    end
+  end
+
+  def test_shared_file_allows_rename_while_snapshots_are_open
+    Dir.mktmpdir("denebola-rename") do |directory|
+      path = File.join(directory, "source.txt")
+      moved = File.join(directory, "moved.txt")
+      File.binwrite(path, "hello")
+      rope = Denebola::LazyRope.open(path)
+      changed = rope.apply_edits([[0...1, "H"]])
+
+      File.rename(path, moved)
+      File.rename(moved, path)
+      refute rope.closed?
+      refute changed.closed?
+    ensure
+      changed&.close
+      rope&.close
+    end
+  end
+
+  def test_batched_edits_keep_a_500_mib_sparse_file_lazy
+    size = 500 << 20
+    Tempfile.create("denebola-large-batch") do |file|
+      file.binmode
+      file.truncate(size)
+      file.seek(size - 5)
+      file.write("tail\n")
+      file.flush
+      rope = Denebola::LazyRope.open(file.path, chunk_size: 65_536, cache_chunks: 2)
+      changed = rope.apply_edits([[0...1, "HEAD"], [(size - 5)...size, "tail\u{1F600}\n"]])
+
+      assert_equal size, rope.bytesize
+      assert_equal size + 7, changed.bytesize
+      assert_equal "\0", rope.byteslice(0, 1).to_s
+      assert_equal "tail\n", rope.byteslice(size - 5, 5).to_s
+      assert_equal "HEAD", changed.byteslice(0, 4).to_s
+      assert_equal "tail\u{1F600}\n", changed.byteslice(changed.bytesize - 9, 9).to_s
+      assert_operator rope.cached_bytes, :<=, 131_072
+      assert_operator changed.cached_bytes, :<=, 131_072
+    ensure
+      changed&.close
+      rope&.close
     end
   end
 
