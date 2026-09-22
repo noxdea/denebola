@@ -192,4 +192,33 @@ module Denebola
     def initialize: (Integer, ?bias: :left | :right) -> void
     def transform: (Array[[Range[Integer], String]]) -> Anchor
   end
+
+  class Sheet
+    DEFAULT_BRANCHING: Integer
+    attr_reader row_count: Integer
+    attr_reader column_count: Integer
+    attr_reader cell_count: Integer
+    def initialize: (?branching: Integer) -> void
+    def []: (Integer, Integer) -> untyped
+    def set: (Integer, Integer, untyped) -> Sheet
+    def delete: (Integer, Integer) -> Sheet
+    def each_in: (Integer, Integer, Integer, Integer) { (Point, untyped) -> void } -> self
+             | (Integer, Integer, Integer, Integer) -> Enumerator[[Point, untyped], self]
+    def summary: (Integer, Integer, Integer, Integer) -> Summary
+    def insert_rows: (Integer, Integer) -> Sheet
+    def delete_rows: (Integer, Integer) -> Sheet
+    def insert_columns: (Integer, Integer) -> Sheet
+    def delete_columns: (Integer, Integer) -> Sheet
+    def snapshot: () -> Sheet
+    def check_invariants!: () -> true
+
+    class Summary
+      attr_reader count: Integer
+      attr_reader sum: Numeric
+      attr_reader min: Numeric?
+      attr_reader max: Numeric?
+      attr_reader types: Hash[Class, Integer]
+      def self.zero: () -> Summary
+    end
+  end
 end

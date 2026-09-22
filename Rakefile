@@ -14,10 +14,12 @@ end
 task(:bench) do
   ruby "--yjit", "-Ilib", "bench/rope.rb"
   ruby "--yjit", "-Ilib", "bench/lazy_rope.rb"
+  ruby "--yjit", "-Ilib", "bench/sheet.rb"
 end
 namespace :bench do
   task(:assert) do
     ruby "--yjit", "-Ilib", "bench/rope.rb", "--assert"
     ruby "--yjit", "-Ilib", "bench/lazy_rope.rb", "--assert"
+    ruby "--yjit", "-Ilib", "bench/sheet.rb", "--assert"
   end
 end

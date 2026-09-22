@@ -17,17 +17,19 @@
   <a href="#installation">Installation</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#text-rope">Text Rope</a> ·
+  <a href="#sparse-sheet">Sparse Sheet</a> ·
   <a href="#generic-summary-tree">Summary Tree</a> ·
   <a href="#benchmarks">Benchmarks</a>
 </p>
 
 ---
 
-Denebola is a library for immutable, structurally shared sequences. It provides a generic summary B+ tree and a Unicode-aware text rope built on it. Every edit returns a new value while reusing untouched subtrees, so retaining a snapshot is an ordinary assignment.
+Denebola is a library for immutable, structurally shared data. It provides a generic summary B+ tree, a Unicode-aware text rope, bounded-memory file editing, and sparse two-dimensional sheets. Every edit returns a new value while reusing untouched subtrees, so retaining a snapshot is an ordinary assignment.
 
 ## Features
 
 - Persistent text editing with structural sharing
+- Persistent sparse 2D sheets with range summaries
 - Bounded-memory, file-backed editing for multi-gigabyte text
 - UTF-8 byte, Unicode codepoint, UTF-16, and line-based indexing
 - Batched edits and explicit anchor transformation
@@ -150,6 +152,28 @@ anchor.offset # => 5
 
 `:left` keeps an anchor before text inserted at its position; `:right` keeps it after. Anchors covered by a replacement collapse to the corresponding side of the replacement. Offsets after an edit move by its byte-length delta. Transformation returns a new anchor; it does not mutate the original or automatically observe a rope.
 
+## Sparse Sheet
+
+`Sheet` stores only populated cells in persistent B+ trees. Empty row and column runs are represented by gaps, so inserting or deleting rows splits and joins tree paths instead of shifting each stored cell. Every update returns a new snapshot; `snapshot` returns the same immutable value in O(1).
+
+```ruby
+sheet = Denebola::Sheet.new
+sheet = sheet.set(0, 0, 12).set(4, 2, 30)
+previous = sheet.snapshot
+
+sheet[4, 2]                                  # => 30
+sheet.summary(0, 0, 4, 2).sum               # => 42
+sheet.each_in(0, 0, 4, 2).to_a              # => [[Denebola::Point.new(0, 0), 12], [Denebola::Point.new(4, 2), 30]]
+sheet = sheet.insert_rows(2, 1).delete(0, 0)
+previous[0, 0]                               # => 12
+```
+
+Coordinates are zero-based, and `each_in`/`summary` use inclusive bounds. `row_count` and `column_count` describe the current grid extent: setting a distant cell and inserting an axis extend it, clearing a cell preserves it, and deleting rows or columns shrinks it. `set(row, column, nil)` is equivalent to `delete`. Strings are copied and frozen; other values should be immutable to preserve snapshots. `summary` counts populated cells, sums Numeric values, reports comparable Numeric minimum/maximum, and counts values by Ruby class in `types`.
+
+`each_in` yields `(Denebola::Point, value)`, so it can directly back a cell-source callback that accepts `(reference, value)`.
+
+Whole-row summaries use the outer row-tree summary without visiting rows or cells. For arbitrary column slices, the implementation visits occupied row entries and combines each row's column-tree summary; it does not enumerate cells, but its cost is O(occupied rows in the selected row range × log columns). A strict O(log² n) arbitrary-rectangle query needs an additional 2D range index and its memory/update costs; that is intentionally deferred until workload measurements justify it.
+
 ## Generic Summary Tree
 
 Items expose `summary`. The summary class supplies `.zero` and `#+`, with associative addition and an identity. Items and their summaries must be immutable. A dimension is a summary attribute name, a callable, or an object with `from_summary(summary)`; its projection must be monotone along the sequence.
@@ -188,6 +212,14 @@ Text dimensions are available as `Denebola::Dimensions::BYTES`, `CHARACTERS`, `U
 ```bash
 bundle exec rake bench
 ```
+
+The sheet benchmark builds a sparse grid and reports build, snapshot, full-row summary, and partial-column summary times. Set `SHEET_CELLS=1000000` to exercise the million-cell snapshot budget:
+
+```bash
+SHEET_CELLS=1000000 bundle exec ruby --yjit -Ilib bench/sheet.rb --assert
+```
+
+Measured 2026-09-23 on arm64 macOS, Ruby 4.0.6 with YJIT: for 1,000,000 populated cells, build took 87.383 s, `snapshot` averaged 0.121 µs over 1,000 calls, a full-row summary took 341 µs, and a one-column summary across 1,000 rows took 63.251 ms. The snapshot meets the 1 ms budget. The partial-column result exposes the documented O(occupied rows × log columns) ceiling; a strict O(log² n) arbitrary-range query would require a 2D range index.
 
 The benchmark compares fanouts 8/16/32/64 and chunk sizes 256/512/1024/2048 before exercising a 1,000,000-line ASCII document (11,000,000 bytes). Timings are five-batch medians after warmup. The defaults are fanout **16** and chunk size **1024 bytes**: smaller chunks improve some edits but allocate more nodes, while these defaults meet the edit and retained-memory budgets together. Override them with `Rope.new(text, branching: 8, chunk_size: 512)`.
 
