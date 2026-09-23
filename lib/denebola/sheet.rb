@@ -108,25 +108,26 @@ module Denebola
 
     attr_reader :row_count, :column_count, :cell_count
 
-    def self.from_rows(rows, column_count, branching)
+    def self.from_rows(rows, column_count, branching, range_index = nil)
       sheet = allocate
       sheet.instance_variable_set(:@branching, branching)
-      sheet.__send__(:initialize_state, rows, column_count)
+      sheet.__send__(:initialize_state, rows, column_count, range_index)
     end
     private_class_method :from_rows
 
     def initialize(branching: DEFAULT_BRANCHING)
       raise ArgumentError, "branching must be an even integer >= 4" unless branching.is_a?(Integer) && branching >= 4 && branching.even?
       @branching = branching
-      initialize_state(Tree.new(summary: RowSummary, branching: branching), 0)
+      initialize_state(Tree.new(summary: RowSummary, branching: branching), 0, RangeIndex.new)
     end
 
-    def initialize_state(rows, column_count)
+    def initialize_state(rows, column_count, range_index)
       raise ArgumentError, "column_count must be a non-negative integer" unless column_count.is_a?(Integer) && column_count >= 0
       @rows = rows
       @row_count = @rows.summary.row_count
       @column_count = column_count
       @cell_count = @rows.summary.values.count
+      @range_index = range_index || RangeIndex.from_rows(@rows)
       freeze
     end
     private :initialize_state
@@ -148,7 +149,8 @@ module Denebola
       item = Row.new(empty_columns) unless item.is_a?(Row)
       columns = set_column(item.columns, column, value)
       updated = Row.new(columns)
-      with_rows(concat(concat(before, tree([updated], RowSummary)), after), [@column_count, column + 1].max)
+      index = @range_index.update(row, column, self[row, column], value)
+      with_rows(concat(concat(before, tree([updated], RowSummary)), after), [@column_count, column + 1].max, index)
     end
 
     # Apply [row, column, value] edits against one snapshot; the last duplicate wins.
@@ -224,7 +226,14 @@ module Denebola
       append_gap(result, new_row_count - position) if new_row_count > position
       return self unless changed || new_row_count != row_count || new_column_count != column_count
 
-      with_rows(tree(result, RowSummary), new_column_count)
+      index = @range_index
+      updates.each do |row, edits|
+        edits.each do |column, value|
+          old_value = self[row, column]
+          index = index.update(row, column, old_value, value) unless old_value == value
+        end
+      end
+      with_rows(tree(result, RowSummary), new_column_count, index)
     end
 
     def delete(row, column)
@@ -237,7 +246,8 @@ module Denebola
       columns = delete_column(item.columns, column)
       return self if columns.equal?(item.columns)
       replacement = columns.summary.values.count.zero? ? Gap.new(1, axis: :row) : Row.new(columns)
-      with_rows(concat(concat(before, tree([replacement], RowSummary)), after), column_count)
+      index = @range_index.update(row, column, self[row, column], nil)
+      with_rows(concat(concat(before, tree([replacement], RowSummary)), after), column_count, index)
     end
 
     def each_in(top, left, bottom, right)
@@ -264,13 +274,7 @@ module Denebola
       _, tail = split_axis(@rows, top, :row)
       rows, = split_axis(tail, [bottom + 1 - top, row_count - top].min, :row)
       return rows.summary.values if left.zero? && right >= column_count - 1
-      result = Summary.zero
-      # ponytail: partial-column summaries visit occupied rows; use a 2D range tree if O(log² n) queries become necessary.
-      rows.each do |item|
-        next unless item.is_a?(Row)
-        result += column_summary(item.columns, left, right)
-      end
-      result
+      @range_index.summary(top, left, bottom, right)
     end
 
     def insert_rows(at, count)
@@ -278,7 +282,9 @@ module Denebola
       return self if count.zero?
       before, after = split_axis(@rows, at, :row)
       inserted = tree([Gap.new(count, axis: :row)], RowSummary)
-      with_rows(concat(concat(before, inserted), after), column_count)
+      rows = concat(concat(before, inserted), after)
+      # ponytail: structural row edits rebuild this index from stored cells; lazy row relabeling is the upgrade path.
+      with_rows(rows, column_count, RangeIndex.from_rows(rows))
     end
 
     def delete_rows(at, count)
@@ -286,7 +292,9 @@ module Denebola
       return self if count.zero? || at == row_count
       before, tail = split_axis(@rows, at, :row)
       _, after = split_axis(tail, [count, row_count - at].min, :row)
-      with_rows(concat(before, after), column_count)
+      rows = concat(before, after)
+      # ponytail: structural row edits rebuild this index from stored cells; lazy row relabeling is the upgrade path.
+      with_rows(rows, column_count, RangeIndex.from_rows(rows))
     end
 
     def insert_columns(at, count)
@@ -300,7 +308,9 @@ module Denebola
           rows << item
         end
       end
-      with_rows(tree(coalesce_gaps(rows, :row), RowSummary), column_count + count)
+      rows = tree(coalesce_gaps(rows, :row), RowSummary)
+      # ponytail: structural column edits rebuild this index from stored cells; lazy column relabeling is the upgrade path.
+      with_rows(rows, column_count + count, RangeIndex.from_rows(rows))
     end
 
     def delete_columns(at, count)
@@ -315,13 +325,23 @@ module Denebola
           rows << item
         end
       end
-      with_rows(tree(coalesce_gaps(rows, :row), RowSummary), column_count - [count, column_count - at].min)
+      rows = tree(coalesce_gaps(rows, :row), RowSummary)
+      # ponytail: structural column edits rebuild this index from stored cells; lazy column relabeling is the upgrade path.
+      with_rows(rows, column_count - [count, column_count - at].min, RangeIndex.from_rows(rows))
     end
 
     def snapshot = self
 
     def check_invariants!
       @rows.check_invariants!
+      @range_index.check_invariants!
+      range_summary = if row_count.zero? || column_count.zero?
+        Summary.zero
+      else
+        @range_index.summary(0, 0, row_count - 1, column_count - 1)
+      end
+      raise "incorrect 2D range-index summary" unless range_summary == @rows.summary.values
+
       actual_rows = 0
       actual_cells = 0
       previous_gap = false
@@ -375,7 +395,7 @@ module Denebola
     def empty_columns = Tree.new(summary: ColumnSummary, branching: @branching)
     def empty_tree(summary) = Tree.new(summary: summary, branching: @branching)
     def tree(items, summary) = Tree.new(items, summary: summary, branching: @branching)
-    def with_rows(rows, columns) = self.class.__send__(:from_rows, rows, columns, @branching)
+    def with_rows(rows, columns, range_index = @range_index) = self.class.__send__(:from_rows, rows, columns, @branching, range_index)
 
     def split_axis(source, position, axis)
       total = axis == :row ? source.summary.row_count : source.summary.column_count

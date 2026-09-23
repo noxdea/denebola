@@ -207,4 +207,44 @@ class SheetTest < Minitest::Test
       values.empty? ? assert_nil(summary.max) : assert_equal(values.max, summary.max)
     end
   end
+
+  def test_partial_rectangle_summary_uses_cached_2d_ranges_without_enumerating_trees
+    cells = 600.times.flat_map do |row|
+      [[row * 2, 1, row], [row * 2, 7, row.even? ? "label" : row * 3]]
+    end
+    sheet = Denebola::Sheet.new.set_many(cells)
+    top, bottom, left, right = 120, 980, 7, 7
+    expected_values = cells.filter_map do |row, column, value|
+      value if row.between?(top, bottom) && column.between?(left, right)
+    end
+    numeric = expected_values.grep(Numeric)
+    expected = Denebola::Sheet::Summary.new(count: expected_values.length, sum: numeric.sum,
+      min: numeric.min, max: numeric.max, types: expected_values.group_by(&:class).transform_values(&:length))
+    original_each = Denebola::Tree.instance_method(:each)
+    Denebola::Tree.send(:remove_method, :each)
+    Denebola::Tree.define_method(:each) { |*| raise "partial summary enumerated a tree" }
+
+    assert_equal expected, sheet.summary(top, left, bottom, right)
+  ensure
+    if original_each
+      Denebola::Tree.send(:remove_method, :each)
+      Denebola::Tree.define_method(:each, original_each)
+    end
+  end
+
+  def test_partial_summaries_track_replacements_deletions_and_old_snapshots
+    original = Denebola::Sheet.new.set_many([
+      [0, 0, 0], [1, 0, -5], [100, 7, 10], [1_000_000, 16_383, "far"]
+    ])
+    changed = original.set(1, 0, 10.0).delete(100, 7)
+
+    assert_equal Denebola::Sheet::Summary.new(count: 3, sum: 5, min: -5, max: 10,
+      types: { Integer => 3 }), original.summary(0, 0, 1_000_000, 7)
+    assert_equal Denebola::Sheet::Summary.new(count: 2, sum: 10.0, min: 0, max: 10.0,
+      types: { Integer => 1, Float => 1 }), changed.summary(0, 0, 1_000_000, 7)
+    assert_equal Denebola::Sheet::Summary.new(count: 1, sum: 0, types: { String => 1 }),
+      changed.summary(1_000_000, 16_383, 2_000_000, 16_383)
+    assert_equal Denebola::Sheet::Summary.zero, changed.summary(2_000_000, 0, 3_000_000, 16_383)
+    changed.check_invariants!
+  end
 end

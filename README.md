@@ -154,7 +154,7 @@ anchor.offset # => 5
 
 ## Sparse Sheet
 
-`Sheet` stores only populated cells in persistent B+ trees. Empty row and column runs are represented by gaps, so inserting or deleting rows splits and joins tree paths instead of shifting each stored cell. Every update returns a new snapshot; `snapshot` returns the same immutable value in O(1).
+`Sheet` stores only populated cells in persistent B+ trees. Empty row and column runs are represented by gaps, so the primary storage can split and join axis ranges without shifting cell nodes. Structural edits currently rebuild the derived 2D summary index from populated cells. Every update returns a new snapshot; `snapshot` returns the same immutable value in O(1).
 
 ```ruby
 sheet = Denebola::Sheet.new
@@ -175,9 +175,9 @@ Coordinates are zero-based, and `each_in`/`summary` use inclusive bounds. `row_c
 
 `each_in` yields `(Denebola::Point, value)`, so it can directly back a cell-source callback that accepts `(reference, value)`.
 
-`set_many` accepts an enumerable of `[row, column, value]` edits, uses the last edit for duplicate coordinates, and returns one persistent snapshot. It bulk-builds the row tree after sorting the batch, so a CSV import avoids rebuilding a tree path for every cell. Its work is proportional to the batch sort plus stored tree entries; untouched row objects and older snapshots remain reusable. Use `set` for isolated edits.
+`set_many` accepts an enumerable of `[row, column, value]` edits, uses the last edit for duplicate coordinates, and returns one persistent snapshot. It bulk-builds the row tree after sorting the batch, avoiding a row-tree path rebuild for every cell; it still path-updates the derived summary index for each changed cell. Untouched row objects and older snapshots remain reusable. Use `set` for isolated edits.
 
-Whole-row summaries use the outer row-tree summary without visiting rows or cells. For arbitrary column slices, the implementation visits occupied row entries and combines each row's column-tree summary; it does not enumerate cells, but its cost is O(occupied rows in the selected row range × log columns). A strict O(log² n) arbitrary-rectangle query needs an additional 2D range index and its memory/update costs; that is intentionally deferred until workload measurements justify it.
+Whole-row summaries use the outer row-tree summary without visiting rows or cells. Arbitrary rectangles use a persistent 2D range index: a partial-column query visits O(log rows × log columns) summary nodes and does not enumerate rows or cells. Point edits copy the affected paths; maintaining exact numeric extrema after deletion adds a logarithmic value-index update. Structural row/column insertion and deletion still rebuild this auxiliary index from populated cells, even though the primary sheet trees retain sparse gaps.
 
 ## Generic Summary Tree
 
@@ -218,13 +218,13 @@ Text dimensions are available as `Denebola::Dimensions::BYTES`, `CHARACTERS`, `U
 bundle exec rake bench
 ```
 
-The sheet benchmark builds a sparse grid and reports build, snapshot, full-row summary, and partial-column summary times. Set `SHEET_CELLS=1000000` to exercise the million-cell snapshot budget:
+The sheet benchmark builds a sparse grid and reports build, snapshot, full-row summary, and partial-column summary times. `bench/sheet_range_index.rb` measures partial-column query scaling across sparse rows:
 
 ```bash
-SHEET_CELLS=1000000 bundle exec ruby --yjit -Ilib bench/sheet.rb --assert
+bundle exec ruby -Ilib bench/sheet_range_index.rb
 ```
 
-Measured 2026-09-23 on arm64 macOS, Ruby 4.0.6 with YJIT: for 1,000,000 populated cells, build took 87.383 s, `snapshot` averaged 0.121 µs over 1,000 calls, a full-row summary took 341 µs, and a one-column summary across 1,000 rows took 63.251 ms. The snapshot meets the 1 ms budget. The partial-column result exposes the documented O(occupied rows × log columns) ceiling; a strict O(log² n) arbitrary-range query would require a 2D range index.
+Measured 2026-09-23 on arm64 macOS, Ruby 4.0.6 without YJIT: batches of 2,000 / 10,000 / 40,000 populated cells (1,000 / 5,000 / 20,000 occupied rows) built in 0.283 / 1.762 / 9.162 s. A one-column summary took 72.69 / 66.33 / 154.42 µs over 500 queries per size. Query time grows with tree depth rather than linearly with selected rows. This workload also shows the 2D index's material build/update cost; million-cell workloads have not yet been remeasured with the index enabled.
 
 The benchmark compares fanouts 8/16/32/64 and chunk sizes 256/512/1024/2048 before exercising a 1,000,000-line ASCII document (11,000,000 bytes). Timings are five-batch medians after warmup. The defaults are fanout **16** and chunk size **1024 bytes**: smaller chunks improve some edits but allocate more nodes, while these defaults meet the edit and retained-memory budgets together. Override them with `Rope.new(text, branching: 8, chunk_size: 512)`.
 
