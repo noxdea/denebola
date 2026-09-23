@@ -151,6 +151,82 @@ module Denebola
       with_rows(concat(concat(before, tree([updated], RowSummary)), after), [@column_count, column + 1].max)
     end
 
+    # Apply [row, column, value] edits against one snapshot; the last duplicate wins.
+    def set_many(changes)
+      grouped = {}
+      changes.each do |change|
+        raise ArgumentError, "each cell change must contain row, column, and value" unless change.respond_to?(:length) && change.length == 3
+
+        row, column, value = change
+        validate_coordinate(row, column)
+        (grouped[row] ||= {})[column] = value
+      end
+      return self if grouped.empty?
+
+      updates = []
+      new_row_count = row_count
+      new_column_count = column_count
+      grouped.sort.each do |row, values|
+        edits = values.sort
+        has_value = false
+        edits.each do |column, value|
+          next if value.nil?
+
+          has_value = true
+          new_row_count = row + 1 if row + 1 > new_row_count
+          new_column_count = column + 1 if column + 1 > new_column_count
+        end
+        updates << [row, edits] if row < row_count || has_value
+      end
+      return self if updates.empty?
+
+      result = []
+      update_index = 0
+      position = 0
+      changed = false
+
+      @rows.each do |item|
+        if item.is_a?(Gap)
+          finish = position + item.length
+          while update_index < updates.length && updates[update_index][0] < finish
+            row, edits = updates[update_index]
+            append_gap(result, row - position) if row > position
+            updated = updated_row(nil, edits)
+            append_row(result, updated)
+            changed ||= !updated.nil?
+            position = row + 1
+            update_index += 1
+          end
+          append_gap(result, finish - position) if finish > position
+          position = finish
+        else
+          if update_index < updates.length && updates[update_index][0] == position
+            updated = updated_row(item, updates[update_index][1])
+            append_row(result, updated)
+            changed ||= !updated.equal?(item)
+            update_index += 1
+          else
+            result << item
+          end
+          position += 1
+        end
+      end
+
+      while update_index < updates.length
+        row, edits = updates[update_index]
+        append_gap(result, row - position) if row > position
+        updated = updated_row(nil, edits)
+        append_row(result, updated)
+        changed ||= !updated.nil?
+        position = row + 1
+        update_index += 1
+      end
+      append_gap(result, new_row_count - position) if new_row_count > position
+      return self unless changed || new_row_count != row_count || new_column_count != column_count
+
+      with_rows(tree(result, RowSummary), new_column_count)
+    end
+
     def delete(row, column)
       validate_coordinate(row, column)
       return self if row >= row_count || column >= column_count
@@ -361,6 +437,93 @@ module Denebola
       return nil if column >= columns.summary.column_count
       _, item, prefix = columns.locate(column, :column_count)
       item.is_a?(Cell) && column == prefix.column_count ? item.value : nil
+    end
+
+    def updated_row(row, edits)
+      columns = row ? row.columns : empty_columns
+      updated = update_columns(columns, edits)
+      return row if row && updated.equal?(columns)
+      return nil if updated.summary.values.count.zero?
+
+      Row.new(updated)
+    end
+
+    def update_columns(columns, edits)
+      return columns if edits.empty?
+
+      extent = [columns.summary.column_count, *edits.filter_map { |column, value| column + 1 unless value.nil? }].max
+      result = []
+      changed = false
+      position = 0
+      edit_index = 0
+
+      columns.each do |item|
+        if item.is_a?(Gap)
+          finish = position + item.length
+          while edit_index < edits.length && edits[edit_index][0] < finish
+            column, value = edits[edit_index]
+            if value.nil?
+              append_gap(result, column - position + 1, :column) if column >= position
+              position = column + 1
+            else
+              append_gap(result, column - position, :column) if column > position
+              result << Cell.new(value)
+              position = column + 1
+              changed = true
+            end
+            edit_index += 1
+          end
+          append_gap(result, finish - position, :column) if finish > position
+          position = finish
+        else
+          if edit_index < edits.length && edits[edit_index][0] == position
+            value = edits[edit_index][1]
+            if value.nil?
+              append_gap(result, 1, :column)
+              changed = true
+            elsif value == item.value
+              result << item
+            else
+              result << Cell.new(value)
+              changed = true
+            end
+            edit_index += 1
+          else
+            result << item
+          end
+          position += 1
+        end
+      end
+
+      while edit_index < edits.length
+        column, value = edits[edit_index]
+        if !value.nil?
+          append_gap(result, column - position, :column) if column > position
+          result << Cell.new(value)
+          position = column + 1
+          changed = true
+        end
+        edit_index += 1
+      end
+      append_gap(result, extent - position, :column) if extent > position
+      return columns unless changed
+
+      tree(result, ColumnSummary)
+    end
+
+    def append_row(items, row)
+      append_gap(items, 1) unless row
+      items << row if row
+    end
+
+    def append_gap(items, length, axis = :row)
+      return if length.zero?
+
+      if items.last.is_a?(Gap)
+        items[-1] = Gap.new(items.last.length + length, axis: axis)
+      else
+        items << Gap.new(length, axis: axis)
+      end
     end
 
     def each_column(columns, left, right)

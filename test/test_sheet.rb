@@ -61,6 +61,61 @@ class SheetTest < Minitest::Test
     sheet.check_invariants!
   end
 
+  def test_set_many_applies_duplicate_dense_and_sparse_edits_persistently
+    source = Denebola::Sheet.new.set(0, 0, "old").set(2, 4, 9)
+    changed = source.set_many([
+      [0, 0, "new"], [0, 1, 2], [0, 1, 3], [2, 4, nil], [2, 3, 6],
+      [5, 100, 7], [1_000_000, 16_383, 8], [1_000_001, 20, nil]
+    ])
+
+    assert_same source, source.snapshot
+    assert_equal "old", source[0, 0]
+    assert_equal 9, source[2, 4]
+    assert_equal "new", changed[0, 0]
+    assert_equal 3, changed[0, 1]
+    assert_nil changed[2, 4]
+    assert_equal 6, changed[2, 3]
+    assert_equal 7, changed[5, 100]
+    assert_equal 8, changed[1_000_000, 16_383]
+    assert_equal [1_000_001, 16_384, 5], [changed.row_count, changed.column_count, changed.cell_count]
+    assert_equal 24, changed.summary(0, 0, 1_000_000, 16_383).sum
+    changed.check_invariants!
+  end
+
+  def test_set_many_noops_and_invalid_input
+    sheet = Denebola::Sheet.new.set(1, 2, "same")
+
+    assert_same sheet, sheet.set_many([[1, 2, "same"], [10_000, 0, nil]])
+    assert_raises(ArgumentError) { sheet.set_many([[2, 3, 1], [-1, 0, 2]]) }
+    assert_raises(ArgumentError) { sheet.set_many([[0, 0]]) }
+    assert_equal "same", sheet[1, 2]
+    sheet.check_invariants!
+  end
+
+  def test_random_bulk_edits_match_sequential_edits
+    random = Random.new(9401)
+    30.times do
+      original = Denebola::Sheet.new
+      40.times do
+        original = original.set(random.rand(20), random.rand(20), random.rand(100))
+      end
+      changes = Array.new(100) do
+        [random.rand(25), random.rand(25), random.rand(5).zero? ? nil : random.rand(100)]
+      end
+      # Duplicate some coordinates to verify that input order defines the winner.
+      changes.concat(changes.first(10).map { |row, column, value| [row, column, value] })
+      expected = changes.reduce(original) { |sheet, (row, column, value)| sheet.set(row, column, value) }
+      actual = original.set_many(changes)
+
+      assert_equal expected.row_count, actual.row_count
+      assert_equal expected.column_count, actual.column_count
+      assert_equal expected.cell_count, actual.cell_count
+      assert_equal expected.each_in(0, 0, 24, 24).to_a, actual.each_in(0, 0, 24, 24).to_a
+      assert_equal expected.summary(0, 0, 24, 24), actual.summary(0, 0, 24, 24)
+      actual.check_invariants!
+    end
+  end
+
   def test_validation_and_string_values_are_isolated
     text = +"value"
     sheet = Denebola::Sheet.new.set(0, 0, text)

@@ -29,7 +29,7 @@ Denebola is a library for immutable, structurally shared data. It provides a gen
 ## Features
 
 - Persistent text editing with structural sharing
-- Persistent sparse 2D sheets with range summaries
+- Persistent sparse 2D sheets with range summaries and batched cell updates
 - Bounded-memory, file-backed editing for multi-gigabyte text
 - UTF-8 byte, Unicode codepoint, UTF-16, and line-based indexing
 - Batched edits and explicit anchor transformation
@@ -166,11 +166,16 @@ sheet.summary(0, 0, 4, 2).sum               # => 42
 sheet.each_in(0, 0, 4, 2).to_a              # => [[Denebola::Point.new(0, 0), 12], [Denebola::Point.new(4, 2), 30]]
 sheet = sheet.insert_rows(2, 1).delete(0, 0)
 previous[0, 0]                               # => 12
+
+sheet = Denebola::Sheet.new.set_many([[0, 0, 12], [0, 1, 8], [1_000_000, 3, "far"]])
+sheet[1_000_000, 3]                          # => "far"
 ```
 
 Coordinates are zero-based, and `each_in`/`summary` use inclusive bounds. `row_count` and `column_count` describe the current grid extent: setting a distant cell and inserting an axis extend it, clearing a cell preserves it, and deleting rows or columns shrinks it. `set(row, column, nil)` is equivalent to `delete`. Strings are copied and frozen; other values should be immutable to preserve snapshots. `summary` counts populated cells, sums Numeric values, reports comparable Numeric minimum/maximum, and counts values by Ruby class in `types`.
 
 `each_in` yields `(Denebola::Point, value)`, so it can directly back a cell-source callback that accepts `(reference, value)`.
+
+`set_many` accepts an enumerable of `[row, column, value]` edits, uses the last edit for duplicate coordinates, and returns one persistent snapshot. It bulk-builds the row tree after sorting the batch, so a CSV import avoids rebuilding a tree path for every cell. Its work is proportional to the batch sort plus stored tree entries; untouched row objects and older snapshots remain reusable. Use `set` for isolated edits.
 
 Whole-row summaries use the outer row-tree summary without visiting rows or cells. For arbitrary column slices, the implementation visits occupied row entries and combines each row's column-tree summary; it does not enumerate cells, but its cost is O(occupied rows in the selected row range × log columns). A strict O(log² n) arbitrary-rectangle query needs an additional 2D range index and its memory/update costs; that is intentionally deferred until workload measurements justify it.
 

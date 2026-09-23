@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add persistent sparse two-dimensional sheets with range summaries.
+- Add efficient batch writes for importing sparse or dense cell ranges.
 
 ## 0.2.2 — 2026-09-18
 
