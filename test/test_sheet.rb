@@ -50,6 +50,35 @@ class SheetTest < Minitest::Test
     inserted.check_invariants!
   end
 
+  def test_blank_axis_edits_reuse_range_index_and_map_fragmented_coordinates
+    sheet = Denebola::Sheet.new.set_many([[0, 0, 10], [2, 4, 20], [5, 8, 30], [8, 12, 40]])
+    index = sheet.instance_variable_get(:@range_index)
+
+    changed = sheet.insert_rows(2, 3).insert_columns(6, 2)
+    assert_same index, changed.instance_variable_get(:@range_index)
+    assert_equal [10, 20, 30, 40], changed.each_in(0, 0, 11, 14).map { |_, value| value }
+    assert_equal 100, changed.summary(0, 0, 11, 14).sum
+    changed.check_invariants!
+
+    restored = changed.delete_rows(2, 3).delete_columns(6, 2)
+    assert_same index, restored.instance_variable_get(:@range_index)
+    assert_equal sheet.each_in(0, 0, 8, 12).to_a, restored.each_in(0, 0, 8, 12).to_a
+    assert_equal sheet.summary(0, 0, 8, 12), restored.summary(0, 0, 8, 12)
+    restored.check_invariants!
+    assert_equal 100, sheet.summary(0, 0, 8, 12).sum
+  end
+
+  def test_fragmented_axis_ranges_preserve_fractional_summaries
+    sheet = Denebola::Sheet.new.set_many([
+      [0, 0, 0.1], [1, 2, 0.2], [2, 1, 0.3], [3, 3, 0.4]
+    ])
+    original = sheet.summary(0, 0, 3, 2)
+    changed = sheet.insert_rows(2, 2).insert_columns(2, 2)
+
+    assert_equal original, changed.summary(0, 0, 5, 4)
+    changed.check_invariants!
+  end
+
   def test_deleting_cells_coalesces_sparse_rows_and_columns
     sheet = Denebola::Sheet.new.set(0, 0, 1).set(0, 5, 2).set(8, 3, 3)
     sheet = sheet.delete(0, 0).delete(0, 5).delete(8, 3)

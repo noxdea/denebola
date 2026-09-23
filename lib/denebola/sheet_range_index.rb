@@ -251,7 +251,7 @@ module Denebola
         query(@root, 0, @capacity, top, [bottom + 1, @capacity].min, left, right)
       end
 
-      def self.from_rows(rows)
+      def self.from_rows(rows, row_axis, column_axis)
         index = new
         row = 0
         rows.each do |item|
@@ -264,7 +264,7 @@ module Denebola
             if cell.is_a?(Gap)
               column += cell.length
             else
-              index = index.update(row, column, nil, cell.value)
+              index = index.update(row_axis.index_at(row), column_axis.index_at(column), nil, cell.value)
               column += 1
             end
           end

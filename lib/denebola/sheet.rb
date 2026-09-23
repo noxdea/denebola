@@ -2,6 +2,122 @@
 
 module Denebola
   class Sheet
+    # Maps current axis coordinates to stable RangeIndex coordinates. Structural
+    # edits split or remove these runs without moving unaffected index entries.
+    # ponytail: flat runs make edits O(S) and rectangle queries O(Sr×Sc); use a persistent interval tree if fragmented-axis workloads dominate.
+    class IndexAxis
+      Segment = Struct.new(:length, :index_start, keyword_init: true)
+
+      attr_reader :extent, :next_index, :segments
+
+      def initialize(segments: [], extent: 0, next_index: 0)
+        @segments = segments.freeze
+        @extent, @next_index = extent, next_index
+        freeze
+      end
+
+      def self.identity(extent)
+        new(segments: extent.positive? ? [segment(extent, 0)] : [], extent: extent, next_index: extent)
+      end
+
+      def ensure_length(length)
+        return self if length == extent
+        raise ArgumentError, "axis length cannot shrink" unless length > extent
+
+        append(length - extent)
+      end
+
+      def index_at(position)
+        raise RangeError, "axis position out of bounds" unless position.is_a?(Integer) && position.between?(0, extent - 1)
+
+        offset = 0
+        segments.each do |segment|
+          return segment.index_start + position - offset if position < offset + segment.length
+          offset += segment.length
+        end
+        raise "axis mapping is incomplete"
+      end
+
+      def ranges(first, last)
+        return [] if first > last || first >= extent
+
+        last = [last, extent - 1].min
+        offset = 0
+        segments.filter_map do |segment|
+          finish = offset + segment.length - 1
+          from = [first, offset].max
+          to = [last, finish].min
+          mapped = [segment.index_start + from - offset, segment.index_start + to - offset] if from <= to
+          offset = finish + 1
+          mapped
+        end
+      end
+
+      def insert(at, count)
+        return self if count.zero?
+
+        left, right = split(at)
+        self.class.new(segments: coalesce(left + [self.class.segment(count, next_index)] + right),
+                       extent: extent + count, next_index: next_index + count)
+      end
+
+      def delete(at, count)
+        count = [count, extent - at].min
+        return self if count.zero?
+
+        left, tail = split(at)
+        _removed, right = split_segments(tail, count)
+        self.class.new(segments: coalesce(left + right), extent: extent - count, next_index: next_index)
+      end
+
+      def check_invariants!
+        raise "invalid axis extent" unless segments.sum(&:length) == extent
+        raise "invalid axis segment" unless segments.all? { |segment| segment.length.positive? && segment.index_start >= 0 }
+        raise "coalescible axis segments" if segments.each_cons(2).any? { |left, right| left.index_start + left.length == right.index_start }
+        true
+      end
+
+      private
+
+      def append(length)
+        self.class.new(segments: coalesce(segments + [self.class.segment(length, next_index)]),
+                       extent: extent + length, next_index: next_index + length)
+      end
+
+      def split(position)
+        raise RangeError, "axis position out of bounds" unless position.between?(0, extent)
+        left, right = split_segments(segments, position)
+        [left, right]
+      end
+
+      def split_segments(items, length)
+        left = []
+        right = []
+        offset = 0
+        items.each do |segment|
+          before = [[length - offset, 0].max, segment.length].min
+          left << self.class.segment(before, segment.index_start) if before.positive?
+          after = segment.length - before
+          right << self.class.segment(after, segment.index_start + before) if after.positive?
+          offset += segment.length
+        end
+        [left, right]
+      end
+
+      def coalesce(items)
+        items.each_with_object([]) do |segment, result|
+          previous = result.last
+          if previous && previous.index_start + previous.length == segment.index_start
+            result[-1] = self.class.segment(previous.length + segment.length, previous.index_start)
+          else
+            result << segment
+          end
+        end
+      end
+
+      def self.segment(length, index_start) = Segment.new(length:, index_start:).freeze
+    end
+
     class Summary
       attr_reader :count, :sum, :min, :max, :types
 
@@ -104,14 +220,14 @@ module Denebola
     end
 
     DEFAULT_BRANCHING = Tree::DEFAULT_BRANCHING
-    private_constant :ColumnSummary, :RowSummary, :Gap, :Cell, :Row
+    private_constant :IndexAxis, :ColumnSummary, :RowSummary, :Gap, :Cell, :Row
 
     attr_reader :row_count, :column_count, :cell_count
 
-    def self.from_rows(rows, column_count, branching, range_index = nil)
+    def self.from_rows(rows, column_count, branching, range_index = nil, row_axis = nil, column_axis = nil)
       sheet = allocate
       sheet.instance_variable_set(:@branching, branching)
-      sheet.__send__(:initialize_state, rows, column_count, range_index)
+      sheet.__send__(:initialize_state, rows, column_count, range_index, row_axis, column_axis)
     end
     private_class_method :from_rows
 
@@ -121,13 +237,17 @@ module Denebola
       initialize_state(Tree.new(summary: RowSummary, branching: branching), 0, nil)
     end
 
-    def initialize_state(rows, column_count, range_index)
+    def initialize_state(rows, column_count, range_index, row_axis = nil, column_axis = nil)
       raise ArgumentError, "column_count must be a non-negative integer" unless column_count.is_a?(Integer) && column_count >= 0
       @rows = rows
       @row_count = @rows.summary.row_count
       @column_count = column_count
       @cell_count = @rows.summary.values.count
       @range_index = range_index
+      @row_axis = row_axis || IndexAxis.identity(@row_count)
+      @column_axis = column_axis || IndexAxis.identity(@column_count)
+      raise ArgumentError, "row-axis extent differs from sheet" unless @row_axis.extent == @row_count
+      raise ArgumentError, "column-axis extent differs from sheet" unless @column_axis.extent == @column_count
       freeze
     end
     private :initialize_state
@@ -151,14 +271,16 @@ module Denebola
       updated = Row.new(columns)
       rows = concat(concat(before, tree([updated], RowSummary)), after)
       new_column_count = [@column_count, column + 1].max
+      row_axis = @row_axis.ensure_length([row_count, row + 1].max)
+      column_axis = @column_axis.ensure_length(new_column_count)
       index = if new_column_count <= 1
         nil
       elsif @range_index
-        @range_index.update(row, column, self[row, column], value)
+        @range_index.update(row_axis.index_at(row), column_axis.index_at(column), self[row, column], value)
       else
-        RangeIndex.from_rows(rows)
+        RangeIndex.from_rows(rows, row_axis, column_axis)
       end
-      with_rows(rows, new_column_count, index)
+      with_rows(rows, new_column_count, index, row_axis, column_axis)
     end
 
     # Apply [row, column, value] edits against one snapshot; the last duplicate wins.
@@ -235,6 +357,8 @@ module Denebola
       return self unless changed || new_row_count != row_count || new_column_count != column_count
 
       rows = tree(result, RowSummary)
+      row_axis = @row_axis.ensure_length(new_row_count)
+      column_axis = @column_axis.ensure_length(new_column_count)
       index = if new_column_count <= 1
         nil
       elsif @range_index
@@ -242,14 +366,16 @@ module Denebola
         updates.each do |row, edits|
           edits.each do |column, value|
             old_value = self[row, column]
-            range_index = range_index.update(row, column, old_value, value) unless old_value == value
+            if old_value != value
+              range_index = range_index.update(row_axis.index_at(row), column_axis.index_at(column), old_value, value)
+            end
           end
         end
         range_index
       else
-        RangeIndex.from_rows(rows)
+        RangeIndex.from_rows(rows, row_axis, column_axis)
       end
-      with_rows(rows, new_column_count, index)
+      with_rows(rows, new_column_count, index, row_axis, column_axis)
     end
 
     def delete(row, column)
@@ -266,9 +392,9 @@ module Denebola
       index = if column_count <= 1
         nil
       elsif @range_index
-        @range_index.update(row, column, self[row, column], nil)
+        @range_index.update(@row_axis.index_at(row), @column_axis.index_at(column), self[row, column], nil)
       else
-        RangeIndex.from_rows(rows)
+        RangeIndex.from_rows(rows, @row_axis, @column_axis)
       end
       with_rows(rows, column_count, index)
     end
@@ -298,7 +424,13 @@ module Denebola
       rows, = split_axis(tail, [bottom + 1 - top, row_count - top].min, :row)
       return rows.summary.values if left.zero? && right >= column_count - 1
       raise "missing 2D range index for partial summary" unless @range_index
-      @range_index.summary(top, left, bottom, right)
+      row_ranges = @row_axis.ranges(top, bottom)
+      column_ranges = @column_axis.ranges(left, right)
+      row_ranges.sum(Summary.zero) do |row_first, row_last|
+        column_ranges.sum(Summary.zero) do |column_first, column_last|
+          @range_index.summary(row_first, column_first, row_last, column_last)
+        end
+      end
     end
 
     def insert_rows(at, count)
@@ -307,20 +439,41 @@ module Denebola
       before, after = split_axis(@rows, at, :row)
       inserted = tree([Gap.new(count, axis: :row)], RowSummary)
       rows = concat(concat(before, inserted), after)
-      # ponytail: structural row edits rebuild this index from stored cells; lazy row relabeling is the upgrade path.
-      index = RangeIndex.from_rows(rows) if column_count > 1
-      with_rows(rows, column_count, index)
+      row_axis = @row_axis.insert(at, count)
+      index = @range_index || RangeIndex.new if column_count > 1
+      with_rows(rows, column_count, index, row_axis)
     end
 
     def delete_rows(at, count)
       validate_delete(at, count, row_count)
       return self if count.zero? || at == row_count
       before, tail = split_axis(@rows, at, :row)
-      _, after = split_axis(tail, [count, row_count - at].min, :row)
+      removed_count = [count, row_count - at].min
+      removed, after = split_axis(tail, removed_count, :row)
       rows = concat(before, after)
-      # ponytail: structural row edits rebuild this index from stored cells; lazy row relabeling is the upgrade path.
-      index = RangeIndex.from_rows(rows) if column_count > 1
-      with_rows(rows, column_count, index)
+      index = @range_index
+      if index && column_count > 1
+        row = at
+        removed.each do |item|
+          if item.is_a?(Gap)
+            row += item.length
+            next
+          end
+          row_index = @row_axis.index_at(row)
+          column = 0
+          item.columns.each do |cell|
+            if cell.is_a?(Cell)
+              index = index.update(row_index, @column_axis.index_at(column), cell.value, nil)
+              column += 1
+            else
+              column += cell.length
+            end
+          end
+          row += 1
+        end
+      end
+      row_axis = @row_axis.delete(at, count)
+      with_rows(rows, column_count, index, row_axis)
     end
 
     def insert_columns(at, count)
@@ -335,39 +488,58 @@ module Denebola
         end
       end
       rows = tree(coalesce_gaps(rows, :row), RowSummary)
-      # ponytail: structural column edits rebuild this index from stored cells; lazy column relabeling is the upgrade path.
       new_column_count = column_count + count
-      index = RangeIndex.from_rows(rows) if new_column_count > 1
-      with_rows(rows, new_column_count, index)
+      column_axis = @column_axis.insert(at, count)
+      index = @range_index || RangeIndex.new if new_column_count > 1
+      with_rows(rows, new_column_count, index, @row_axis, column_axis)
     end
 
     def delete_columns(at, count)
       validate_delete(at, count, column_count)
       return self if count.zero? || at == column_count
       rows = []
+      index = @range_index
+      delete_count = [count, column_count - at].min
+      row = 0
       @rows.each do |item|
+        if item.is_a?(Gap)
+          rows << item
+          row += item.length
+          next
+        end
+        if index && column_count - delete_count > 1
+          each_column(item.columns, at, at + delete_count - 1) do |column, value|
+            index = index.update(@row_axis.index_at(row), @column_axis.index_at(column), value, nil)
+          end
+        end
         if item.is_a?(Row) && at < item.columns.summary.column_count
           columns = delete_axis(item.columns, at, [count, item.columns.summary.column_count - at].min, :column)
           rows << (columns.summary.values.count.zero? ? Gap.new(1, axis: :row) : Row.new(columns))
         else
           rows << item
         end
+        row += 1
       end
       rows = tree(coalesce_gaps(rows, :row), RowSummary)
-      # ponytail: structural column edits rebuild this index from stored cells; lazy column relabeling is the upgrade path.
-      new_column_count = column_count - [count, column_count - at].min
-      index = RangeIndex.from_rows(rows) if new_column_count > 1
-      with_rows(rows, new_column_count, index)
+      new_column_count = column_count - delete_count
+      column_axis = @column_axis.delete(at, count)
+      index = nil if new_column_count <= 1
+      index ||= RangeIndex.new if new_column_count > 1
+      with_rows(rows, new_column_count, index, @row_axis, column_axis)
     end
 
     def snapshot = self
 
     def check_invariants!
       @rows.check_invariants!
+      @row_axis.check_invariants!
+      @column_axis.check_invariants!
+      raise "incorrect row-axis extent" unless @row_axis.extent == row_count
+      raise "incorrect column-axis extent" unless @column_axis.extent == column_count
       if column_count > 1
         raise "missing 2D range index" unless @range_index
         @range_index.check_invariants!
-        range_summary = row_count.zero? ? Summary.zero : @range_index.summary(0, 0, row_count - 1, column_count - 1)
+        range_summary = indexed_summary(0, 0, row_count - 1, column_count - 1)
         raise "incorrect 2D range-index summary" unless range_summary == @rows.summary.values
       end
 
@@ -424,7 +596,21 @@ module Denebola
     def empty_columns = Tree.new(summary: ColumnSummary, branching: @branching)
     def empty_tree(summary) = Tree.new(summary: summary, branching: @branching)
     def tree(items, summary) = Tree.new(items, summary: summary, branching: @branching)
-    def with_rows(rows, columns, range_index = nil) = self.class.__send__(:from_rows, rows, columns, @branching, range_index)
+    def with_rows(rows, columns, range_index = nil, row_axis = @row_axis, column_axis = @column_axis)
+      self.class.__send__(:from_rows, rows, columns, @branching, range_index, row_axis, column_axis)
+    end
+
+    def indexed_summary(top, left, bottom, right)
+      return Summary.zero if top > bottom || left > right
+
+      row_ranges = @row_axis.ranges(top, bottom)
+      column_ranges = @column_axis.ranges(left, right)
+      row_ranges.sum(Summary.zero) do |row_first, row_last|
+        column_ranges.sum(Summary.zero) do |column_first, column_last|
+          @range_index.summary(row_first, column_first, row_last, column_last)
+        end
+      end
+    end
 
     def split_axis(source, position, axis)
       total = axis == :row ? source.summary.row_count : source.summary.column_count

@@ -27,9 +27,12 @@ sizes.each do |rows|
   _, query_seconds = elapsed do
     queries.times { summary = sheet.summary(0, 7, rows * 3, 7) }
   end
+  _, row_edit_seconds = elapsed { sheet.insert_rows(rows, 1).delete_rows(rows, 1) }
+  _, column_edit_seconds = elapsed { sheet.insert_columns(8, 1).delete_columns(8, 1) }
   raise "incorrect partial-column summary for #{rows} rows" unless summary == expected
 
   puts "rows=#{rows} cells=#{sheet.cell_count} build=#{format('%.3f', build_seconds)}s " \
     "partial_column_query=#{format('%.2f', query_seconds * 1_000_000 / queries)}µs " \
-    "queries=#{queries}"
+    "row_insert_delete=#{format('%.3f', row_edit_seconds)}s " \
+    "column_insert_delete=#{format('%.3f', column_edit_seconds)}s queries=#{queries}"
 end
