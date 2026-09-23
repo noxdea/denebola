@@ -175,9 +175,9 @@ Coordinates are zero-based, and `each_in`/`summary` use inclusive bounds. `row_c
 
 `each_in` yields `(Denebola::Point, value)`, so it can directly back a cell-source callback that accepts `(reference, value)`.
 
-`set_many` accepts an enumerable of `[row, column, value]` edits, uses the last edit for duplicate coordinates, and returns one persistent snapshot. It bulk-builds the row tree after sorting the batch, avoiding a row-tree path rebuild for every cell; it still path-updates the derived summary index for each changed cell. Untouched row objects and older snapshots remain reusable. Use `set` for isolated edits.
+`set_many` accepts an enumerable of `[row, column, value]` edits, uses the last edit for duplicate coordinates, and returns one persistent snapshot. It bulk-builds the row tree after sorting the batch, avoiding a row-tree path rebuild for every cell; multi-column sheets also update the derived range index, while single-column sheets need no index. Untouched row objects and older snapshots remain reusable. Use `set` for isolated edits.
 
-Whole-row summaries use the outer row-tree summary without visiting rows or cells. Arbitrary rectangles use a persistent 2D range index: a partial-column query visits O(log rows × log columns) summary nodes and does not enumerate rows or cells. Point edits copy the affected paths; maintaining exact numeric extrema after deletion adds a logarithmic value-index update. Structural row/column insertion and deletion still rebuild this auxiliary index from populated cells, even though the primary sheet trees retain sparse gaps.
+Whole-row summaries use the outer row-tree summary without visiting rows or cells. Arbitrary rectangles use a persistent 2D range index: a partial-column query visits O(log rows × log columns) summary nodes and does not enumerate rows or cells. Single-column sheets need no 2D index because every valid column range is the full width. Wider sheets maintain the index, building it when first widened from one column; point edits copy affected paths, and maintaining exact numeric extrema after deletion adds a logarithmic value-index update. Structural row/column insertion and deletion still rebuild this auxiliary index from populated cells, even though the primary sheet trees retain sparse gaps.
 
 ## Generic Summary Tree
 

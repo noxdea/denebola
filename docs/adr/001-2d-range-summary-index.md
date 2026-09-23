@@ -27,6 +27,10 @@ persistent AVL multiset so deleting a current minimum or maximum restores the
 next value. Thus coordinate-path work is `O(log R × log C)`; exact extrema
 maintenance adds `O(log V)` value-tree work for each changed inner leaf, where
 `V` is the number of distinct comparable numeric values in that row interval.
+For a sheet no wider than one column, the 2D index is unnecessary: every valid
+column query is a whole-width query already answered by the row B+ tree. Build
+the index only when a sheet becomes wider, and discard it when structural
+column deletion returns the sheet to one column.
 
 The index is auxiliary and is rebuilt from populated cells after structural
 row/column insertions or deletions. This preserves the primary trees' sparse
@@ -48,7 +52,10 @@ rows in 0.283 / 1.762 / 9.162 s. A one-column query averaged 72.69 / 66.33 /
 154.42 µs over 500 queries per size. Query time did not scale linearly with
 selected rows, while the build/update cost is significant and must be considered
 for large imports. Million-cell behavior with this index has not yet been
-measured.
+measured. After avoiding the redundant index on one-column sheets, Rukbat's
+100k formula-chain benchmark completed load/recalculate in 4.965 s and
+source-edit/recalculate in 1.870 s (below its 3 s recalculation gate); before
+the specialization these were 13.96 s and 16.592 s.
 
 ## Remaining work
 

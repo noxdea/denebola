@@ -92,6 +92,20 @@ class SheetTest < Minitest::Test
     sheet.check_invariants!
   end
 
+  def test_single_column_sheets_skip_the_unneeded_2d_index
+    sheet = Denebola::Sheet.new.set_many(100.times.map { |row| [row, 0, row] })
+
+    assert_nil sheet.instance_variable_get(:@range_index)
+    assert_equal 4_950, sheet.summary(0, 0, 99, 0).sum
+    assert_nil sheet.instance_variable_get(:@range_index)
+
+    wider = sheet.set(50, 1, "label")
+    refute_nil wider.instance_variable_get(:@range_index)
+    assert_equal({ Integer => 100 }, wider.summary(0, 0, 99, 0).types)
+    assert_equal({ String => 1 }, wider.summary(0, 1, 99, 1).types)
+    wider.check_invariants!
+  end
+
   def test_random_bulk_edits_match_sequential_edits
     random = Random.new(9401)
     30.times do
