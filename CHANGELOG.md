@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0 — 2026-09-25
+
+- Add a rope-backed buffer adapter for Zaniah CodeEditor.
+
 ## 0.3.0 — 2026-09-23
 
 - Add persistent sparse two-dimensional sheets with range summaries.

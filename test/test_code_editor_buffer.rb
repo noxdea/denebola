@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "denebola/code_editor_buffer"
+require "zaniah/ui"
 require_relative "test_helper"
 
 class CodeEditorBufferTest < Minitest::Test
@@ -46,15 +47,7 @@ class CodeEditorBufferTest < Minitest::Test
     assert_raises(ArgumentError) { Denebola::CodeEditorBuffer.new("not a rope") }
   end
 
-  def test_zaniah_code_editor_integration_when_available
-    begin
-      require "zaniah/ui"
-    rescue LoadError
-      skip "Zaniah is an optional integration"
-    end
-    skip "CodeEditor buffer interface is unavailable" unless defined?(Zaniah::UI::CodeEditor)
-    skip "installed Zaniah predates the buffer interface" unless Zaniah::UI::CodeEditor.instance_method(:initialize).parameters.any? { |_, name| name == :buffer }
-
+  def test_zaniah_code_editor_integration
     editor = Zaniah::UI::CodeEditor.new(buffer: Denebola::CodeEditorBuffer.new(Denebola::Rope.new("abc\ndef")))
     assert_equal "abc\ndef", editor.value
     editor.replace(1...2, "😀")

@@ -7,3 +7,4 @@ gemspec
 
 gem "rake", "~> 13.0"
 gem "minitest", ">= 5", "< 7"
+gem "zaniah", "~> 0.10.0", require: false
