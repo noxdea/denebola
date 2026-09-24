@@ -133,6 +133,25 @@ rope.offset_at_utf16_point(Denebola::Point.new(0, 2)) # => 4
 
 `line(row)` omits the terminator. Rows are zero-based; empty text and a final empty row after a terminator each count as a line. A byte position between CR and LF normalizes to the following row, column zero; converting that point back returns the position after LF.
 
+### Zaniah CodeEditor buffer
+
+The optional adapter exposes a persistent `Rope` through Zaniah's line-addressed
+CodeEditor buffer interface. Denebola does not depend on Zaniah:
+
+```ruby
+require "denebola/code_editor_buffer"
+require "zaniah/ui"
+
+buffer = Denebola::CodeEditorBuffer.new(Denebola::Rope.new("hello\nworld"))
+editor = Zaniah::UI::CodeEditor.new(buffer: buffer)
+```
+
+`line_count`, `line`, `line_start`, and `line_of` use Rope indexes; offsets are
+UTF-8 byte positions. `replace`, `undo`, and `redo` keep structurally shared
+snapshots, and `can_undo?`/`can_redo?` control editor actions. `to_s` materializes
+the full document when CodeEditor requests its value. `LazyRope` is not accepted:
+its default line count is an estimate, whereas CodeEditor needs an exact count.
+
 `rope.summary` exposes `bytesize`, `length`, `utf16_length`, `break_count`, `longest_row` (the earliest row with maximum width), `longest_row_length`, `first_line_length`, and `last_line_length`. `TextSummary.zero` is the identity, and `summary + other_summary` combines concatenated text, including CRLF across a boundary.
 
 ### Anchors

@@ -186,6 +186,21 @@ module Denebola
     def close: () -> nil
   end
 
+  class CodeEditorBuffer
+    attr_reader rope: Rope
+    def initialize: (?Rope) -> void
+    def line_count: () -> Integer
+    def line: (Integer) -> String
+    def line_start: (Integer) -> Integer
+    def line_of: (Integer) -> Integer
+    def to_s: () -> String
+    def replace: (Range[Integer?], String) -> self
+    def undo: () -> self
+    def redo: () -> self
+    def can_undo?: () -> bool
+    def can_redo?: () -> bool
+  end
+
   class Anchor
     attr_reader offset: Integer
     attr_reader bias: :left | :right
